@@ -1,53 +1,99 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard and mouse state, read by the loop each frame. Keys are tracked by code so layout
+// does not matter; the mouse feeds the third-person camera through pointer lock, and the left
+// button is the trigger. One-shot actions (pause, enter car, confirm) are queued as edges so a
+// held key never repeats them.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+export const ACTION_PAUSE = 1;
+export const ACTION_ENTER = 2;
+export const ACTION_CONFIRM = 4;
+export const ACTION_RESTART = 8;
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+const KEY_ACTIONS = {
+  Escape: ACTION_PAUSE,
+  KeyP: ACTION_PAUSE,
+  KeyF: ACTION_ENTER,
+  Enter: ACTION_CONFIRM,
+  Space: ACTION_CONFIRM,
+  KeyR: ACTION_RESTART,
+};
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
+export function createInput(canvas) {
+  const down = new Set();
   let actions = 0;
+  let mouseDX = 0;
+  let mouseDY = 0;
+  let firing = false;
+  let locked = false;
 
   window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
+    if (event.repeat) return;
+    down.add(event.code);
+    const action = KEY_ACTIONS[event.code];
+    if (action) {
+      actions |= action;
+      if (event.code === 'Space') event.preventDefault();
+    }
   });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
+  window.addEventListener('keyup', (event) => down.delete(event.code));
   window.addEventListener('blur', () => {
-    left = false;
-    right = false;
+    down.clear();
+    firing = false;
   });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+
+  canvas.addEventListener('click', () => {
+    if (!locked && document.body.classList.contains('playing')) canvas.requestPointerLock?.();
+  });
+  document.addEventListener('pointerlockchange', () => {
+    locked = document.pointerLockElement === canvas;
+    if (!locked) firing = false;
+  });
+  window.addEventListener('mousemove', (event) => {
+    if (!locked) return;
+    mouseDX += event.movementX || 0;
+    mouseDY += event.movementY || 0;
+  });
+  window.addEventListener('mousedown', (event) => {
+    if (event.button === 0 && locked) firing = true;
+  });
+  window.addEventListener('mouseup', (event) => {
+    if (event.button === 0) firing = false;
   });
 
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+    /** Held movement axes: x is strafe (-1 left, +1 right), z is forward (+1 fwd, -1 back). */
+    move() {
+      let x = 0;
+      let z = 0;
+      if (down.has('KeyA') || down.has('ArrowLeft')) x -= 1;
+      if (down.has('KeyD') || down.has('ArrowRight')) x += 1;
+      if (down.has('KeyW') || down.has('ArrowUp')) z += 1;
+      if (down.has('KeyS') || down.has('ArrowDown')) z -= 1;
+      return { x, z };
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
+    run() {
+      return down.has('ShiftLeft') || down.has('ShiftRight');
+    },
+    firing() {
+      return firing;
+    },
+    /** Mouse movement since the last frame, and clears it. */
+    takeMouse() {
+      const out = { dx: mouseDX, dy: mouseDY };
+      mouseDX = 0;
+      mouseDY = 0;
+      return out;
+    },
+    /** One-shot actions pressed since the last frame, and clears them. */
     takeActions() {
-      const taken = actions;
+      const out = actions;
       actions = 0;
-      return taken;
+      return out;
+    },
+    locked() {
+      return locked;
+    },
+    unlock() {
+      if (locked) document.exitPointerLock?.();
     },
   };
 }

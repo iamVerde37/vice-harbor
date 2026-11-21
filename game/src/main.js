@@ -1,18 +1,18 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
+// VICE HARBOR — boot and screens. The world (world.js) simulates; this file owns the
+// renderer's loop and the screen flow: title → story card → play, with pause, and the
+// busted / wasted / job-failed endings. The world advances in fixed 1/60 s steps however
+// fast the display runs.
 //
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { stageShot } from './shots.js';
+// ?seed=N fixes the city and traffic. ?shot=start|drive|chase|mission (with &seed=N)
+// stages that scene for a screenshot instead of running the game (see shots.js).
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
-const MAX_FRAME = 0.25;
+import { STEP } from './config.js';
+import { createRandom } from './random.js';
+import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
+import { createAudio } from './audio.js';
+import { createHud } from './hud.js';
+import { createWorld } from './world.js';
+import { stageShot } from './shots.js';
 
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
@@ -21,112 +21,243 @@ const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() 
 
 const canvas = document.getElementById('game');
 const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(58, window.innerWidth / window.innerHeight, 0.1, 1200);
+camera.position.set(-100, 22, 14);
+camera.lookAt(20, 4, -52);
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+const rng = createRandom(seed);
+const audio = createAudio();
+const hud = createHud();
+const input = createInput(canvas);
+const world = createWorld({ scene, rng, audio, hud });
+
+const $ = (id) => document.getElementById(id);
+const overlays = {
+  title: $('title-screen'),
+  card: $('story-card'),
+  pause: $('pause-screen'),
+  end: $('end-screen'),
+};
+function announce(message) {
+  status.textContent = message;
 }
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
-  }
-}
+const idleInput = {
+  move: () => ({ x: 0, z: 0 }),
+  run: () => false,
+  firing: () => false,
+  takeMouse: () => ({ dx: 0, dy: 0 }),
+  takeActions: () => 0,
+  locked: () => false,
+  unlock: () => {},
+};
 
 function runShot(name) {
-  const scene = stageShot(name, world);
+  const result = stageShot(name, world, camera);
+  if (result.hud) document.body.classList.add('playing');
+  else overlays.title.classList.add('show');
   let painted = 0;
   function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
+    renderer.render(scene, camera);
     painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
+    if (painted < 3) requestAnimationFrame(paint);
     else window.__shotReady = true;
   }
   requestAnimationFrame(paint);
 }
 
 function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
+  let screen = 'title'; // 'title' | 'card' | 'play' | 'pause' | 'end'
+  let attract = true;
   let accumulator = 0;
   let last = performance.now();
+  let wasLocked = false;
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
+  const save = world.loadSave();
+  if (save) $('btn-continue').style.display = '';
+
+  function showCard() {
+    const card = world.missions.card;
+    $('card-title').textContent = card.title;
+    $('card-text').textContent = card.text;
+    overlays.card.classList.add('show');
+    screen = 'card';
+    announce(`${card.title}. ${card.text}`);
   }
 
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
+  function dismissCard() {
+    overlays.card.classList.remove('show');
+    world.missions.dismissCard();
+    attract = false;
+    screen = 'play';
+    document.body.classList.add('playing');
   }
 
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
+  function startNew() {
+    audio.unlock();
+    audio.click();
+    audio.startMusic();
+    overlays.title.classList.remove('show');
+    showCard();
+  }
+
+  function continueGame() {
+    audio.unlock();
+    audio.click();
+    audio.startMusic();
+    world.applySave(save);
+    overlays.title.classList.remove('show');
+    attract = false;
+    screen = 'play';
+    document.body.classList.add('playing');
+    announce('Welcome back to Vice Harbor.');
+  }
+
+  function pauseGame() {
+    if (screen !== 'play') return;
+    screen = 'pause';
+    overlays.pause.classList.add('show');
+    input.unlock();
+    announce('Paused.');
+  }
+
+  function resumeGame() {
+    overlays.pause.classList.remove('show');
+    screen = 'play';
+    announce('Playing.');
+  }
+
+  function showEnd(kind) {
+    screen = 'end';
+    input.unlock();
+    const primary = $('btn-end');
+    if (kind === 'failed') {
+      $('end-title').textContent = 'JOB FAILED';
+      $('end-title').style.color = '';
+      $('end-text').textContent = world.missions.failReason;
+      primary.textContent = 'Try the job again';
+      primary.onclick = () => {
+        audio.click();
+        overlays.end.classList.remove('show');
+        world.missions.retry();
+        screen = 'play';
+      };
+      announce(`Job failed. ${world.missions.failReason}`);
+    } else {
+      const fine = world.applyFine(kind);
+      const busted = kind === 'busted';
+      $('end-title').textContent = busted ? 'BUSTED' : 'WASTED';
+      $('end-title').style.color = busted ? '#5ea0ff' : '#ff3d5e';
+      $('end-text').textContent = busted
+        ? `Pinned by the harbour police. The fine and the impound cost you $${fine.toLocaleString('en-US')}.`
+        : `You wake up outside St. Marina Hospital, lighter by $${fine.toLocaleString('en-US')} in fees.`;
+      const inJob = world.missions.phase === 'run';
+      primary.textContent = inJob ? 'Restart the job' : 'Back on the street';
+      primary.onclick = () => {
+        audio.click();
+        overlays.end.classList.remove('show');
+        if (inJob) world.missions.retry();
+        else {
+          world.resetAfterTrouble();
+          world.respawn();
+        }
+        screen = 'play';
+      };
+      announce(busted ? 'Busted.' : 'Wasted.');
     }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
+    overlays.end.classList.add('show');
   }
 
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
+  $('btn-new').addEventListener('click', startNew);
+  $('btn-continue').addEventListener('click', continueGame);
+  $('btn-story').addEventListener('click', () => {
+    audio.click();
+    dismissCard();
+  });
+  $('btn-resume').addEventListener('click', () => {
+    audio.click();
+    resumeGame();
+  });
+  $('btn-save-title').addEventListener('click', () => {
+    world.saveGame();
+    window.location.reload();
+  });
+  $('btn-end-title').addEventListener('click', () => window.location.reload());
 
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
-      return;
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement === canvas) wasLocked = true;
+    else if (wasLocked) {
+      wasLocked = false;
+      if (screen === 'play') pauseGame();
     }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
-  }
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden && screen === 'play') pauseGame();
+  });
+
+  overlays.title.classList.add('show');
+  announce('Vice Harbor. Choose New Game or Continue.');
 
   function frame(now) {
     requestAnimationFrame(frame);
-    accumulator += Math.min((now - last) / 1000, MAX_FRAME);
+    const dt = Math.min((now - last) / 1000, 0.25);
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
+    const actions = input.takeActions();
+
+    if (screen === 'play') {
+      if (actions & ACTION_PAUSE) {
+        pauseGame();
+      } else {
+        accumulator += dt;
+        let first = true;
+        while (accumulator >= STEP && screen === 'play') {
+          world.update(STEP, input, camera, first ? actions : 0);
+          first = false;
+          accumulator -= STEP;
+          if (world.state.busted || world.state.wasted) break;
+        }
+        if (world.state.busted) showEnd('busted');
+        else if (world.state.wasted) showEnd('wasted');
+        else if (world.missions.phase === 'failed') showEnd('failed');
+        else if (world.missions.phase === 'card') showCard();
+      }
+    } else if (screen === 'card') {
+      if (actions & ACTION_CONFIRM) dismissCard();
+      else if (attract) {
+        accumulator += dt;
+        while (accumulator >= STEP) {
+          world.setCamYaw(world.camYaw + STEP * 0.045);
+          world.update(STEP, idleInput, camera, 0);
+          accumulator -= STEP;
+        }
+      }
+    } else if (screen === 'title') {
+      accumulator += dt;
+      while (accumulator >= STEP) {
+        world.setCamYaw(world.camYaw + STEP * 0.045);
+        world.update(STEP, idleInput, camera, 0);
         accumulator -= STEP;
       }
-    } else {
-      accumulator = 0;
+    } else if (screen === 'pause') {
+      if (actions & (ACTION_PAUSE | ACTION_CONFIRM)) resumeGame();
     }
-    renderer.draw(world.state, screen, best);
+    renderer.render(scene, camera);
   }
-
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    }
-  });
-
-  announce('Block Dodger. Press Space or click to start.');
   requestAnimationFrame(frame);
 }
 

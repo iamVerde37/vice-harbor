@@ -3,17 +3,144 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>VICE HARBOR — an open-world crime game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
-  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
+  :root {
+    --ink: #eef2f7;
+    --muted: #9aa7b8;
+    --pink: #ff3d7e;
+    --cyan: #28e6ff;
+    --gold: #ffd34d;
+    --panel: rgba(10, 14, 24, 0.78);
+    --panel-line: rgba(120, 200, 255, 0.25);
+  }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0e16; font-family: "Segoe UI", system-ui, -apple-system, sans-serif; color: var(--ink); }
+  #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+  /* ---------- HUD ---------- */
+  #hud { position: fixed; inset: 0; pointer-events: none; display: none; }
+  body.playing #hud { display: block; }
+  .hud-box { background: var(--panel); border: 1px solid var(--panel-line); border-radius: 10px; backdrop-filter: blur(3px); }
+  #hud-tr { position: absolute; top: 14px; right: 14px; text-align: right; padding: 10px 14px; min-width: 168px; }
+  #money { font-size: 26px; font-weight: 800; color: #7dff9a; letter-spacing: 0.5px; text-shadow: 0 0 12px rgba(60,255,140,.35); }
+  #stars { font-size: 21px; letter-spacing: 3px; color: var(--gold); min-height: 26px; text-shadow: 0 0 10px rgba(255,190,40,.6); }
+  #stars .off { color: rgba(255,255,255,.18); text-shadow: none; }
+  #clock { font-size: 12px; color: var(--muted); letter-spacing: 2px; text-transform: uppercase; }
+  #hud-bl { position: absolute; left: 14px; bottom: 14px; padding: 10px 14px; width: 230px; }
+  #health-track { height: 12px; background: rgba(255,255,255,.12); border-radius: 6px; overflow: hidden; }
+  #health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #ff3d5e, #ff8a5e); border-radius: 6px; transition: width .15s; }
+  #hud-state { margin-top: 7px; font-size: 12px; letter-spacing: 1.6px; text-transform: uppercase; color: var(--muted); }
+  #speed { color: var(--ink); font-weight: 700; }
+  #objective { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); max-width: 520px; padding: 9px 18px; text-align: center; }
+  #objective-title { font-size: 11px; letter-spacing: 3px; color: var(--cyan); text-transform: uppercase; }
+  #objective-text { font-size: 16px; font-weight: 600; margin-top: 2px; }
+  #objective-dist { font-size: 12px; color: var(--gold); letter-spacing: 1px; }
+  #prompt { position: absolute; bottom: 108px; left: 50%; transform: translateX(-50%); padding: 8px 18px; font-size: 15px; display: none; }
+  #prompt b { color: var(--cyan); }
+  #banner { position: absolute; top: 34%; left: 50%; transform: translate(-50%, -50%); text-align: center; opacity: 0; transition: opacity .3s; }
+  #banner-main { font-size: 44px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; color: var(--ink); text-shadow: 0 0 24px rgba(255,61,126,.75), 0 2px 0 rgba(0,0,0,.4); }
+  #banner-sub { font-size: 17px; color: var(--gold); letter-spacing: 2px; margin-top: 4px; }
+  #minimap-wrap { position: absolute; right: 14px; bottom: 14px; padding: 6px; }
+  #minimap { display: block; width: 184px; height: 184px; }
+  #damage { position: fixed; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 55%, rgba(255,30,50,.45) 100%); opacity: 0; transition: opacity .12s; }
+
+  /* ---------- Overlays ---------- */
+  .overlay { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column; text-align: center; z-index: 5; }
+  .overlay.show { display: flex; }
+  #title-screen { background: linear-gradient(180deg, rgba(6,8,18,.25) 0%, rgba(6,8,18,.62) 78%, rgba(6,8,18,.88) 100%); }
+  #game-title { font-size: 84px; font-weight: 900; letter-spacing: 6px; line-height: .95; margin: 0; color: var(--ink);
+    text-shadow: 0 0 18px rgba(40,230,255,.65), 0 0 46px rgba(255,61,126,.55), 0 4px 0 rgba(0,0,0,.35); }
+  #game-title .vice { color: var(--pink); }
+  #tagline { margin-top: 10px; font-size: 16px; letter-spacing: 3.5px; text-transform: uppercase; color: var(--cyan); }
+  #story-blurb { margin-top: 18px; max-width: 560px; font-size: 15px; line-height: 1.55; color: #d7dee9; padding: 0 20px; }
+  .btn-row { margin-top: 26px; display: flex; gap: 14px; }
+  button { pointer-events: auto; cursor: pointer; font: inherit; font-weight: 800; letter-spacing: 2.5px; text-transform: uppercase;
+    color: #081018; background: linear-gradient(180deg, #57f2ff, #19b8d8); border: 0; border-radius: 8px; padding: 13px 30px; font-size: 15px;
+    box-shadow: 0 6px 22px rgba(40,230,255,.35); }
+  button:hover { filter: brightness(1.12); }
+  button.ghost { background: rgba(10,16,28,.7); color: var(--ink); border: 1px solid var(--panel-line); box-shadow: none; }
+  #controls { margin-top: 30px; font-size: 13px; line-height: 1.9; color: var(--muted); letter-spacing: 1px; }
+  #controls b { color: var(--ink); }
+  .card { background: rgba(8, 12, 22, .88); border: 1px solid var(--panel-line); border-radius: 14px; max-width: 600px; padding: 34px 40px; margin: 0 16px; }
+  .card h2 { margin: 0 0 12px; font-size: 30px; letter-spacing: 3px; text-transform: uppercase; color: var(--cyan); }
+  .card p { font-size: 16px; line-height: 1.65; color: #dde5ef; }
+  #story-card, #pause-screen, #end-screen { background: rgba(4, 6, 12, .45); }
+  #end-title { font-size: 64px; font-weight: 900; letter-spacing: 8px; margin: 0; text-shadow: 0 0 30px rgba(255,61,94,.6); }
+  #end-text { margin-top: 12px; font-size: 17px; color: #dde5ef; max-width: 520px; line-height: 1.55; padding: 0 16px; }
 </style>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
+<canvas id="game" aria-label="Vice Harbor: a 3D open-world crime game. Walk with W A S D, steal cars with F, shoot with the mouse."></canvas>
 <p id="status" role="status" aria-live="polite"></p>
+
+<div id="hud">
+  <div id="hud-tr" class="hud-box">
+    <div id="money">$0</div>
+    <div id="stars"></div>
+    <div id="clock">AFTERNOON</div>
+  </div>
+  <div id="objective" class="hud-box">
+    <div id="objective-title"></div>
+    <div id="objective-text"></div>
+    <div id="objective-dist"></div>
+  </div>
+  <div id="hud-bl" class="hud-box">
+    <div id="health-track"><div id="health-fill"></div></div>
+    <div id="hud-state">On foot</div>
+  </div>
+  <div id="prompt" class="hud-box"></div>
+  <div id="banner"><div id="banner-main"></div><div id="banner-sub"></div></div>
+  <div id="minimap-wrap" class="hud-box"><canvas id="minimap" width="184" height="184"></canvas></div>
+</div>
+<div id="damage"></div>
+
+<div id="title-screen" class="overlay">
+  <h1 id="game-title"><span class="vice">VICE</span> HARBOR</h1>
+  <div id="tagline">Steal it. Run it. Outrun the stars.</div>
+  <p id="story-blurb">Rico owes fixer Marisol Vega $2,900 by week's end. Three jobs pay it off: a lifted coupe,
+    a hot package, and a score to settle at Casino Sol. The harbour provides the cars — the harbour police provide the chase.</p>
+  <div class="btn-row">
+    <button id="btn-new">New Game</button>
+    <button id="btn-continue" class="ghost" style="display:none">Continue</button>
+  </div>
+  <div id="controls">
+    <b>W A S D</b> move &nbsp;·&nbsp; <b>Shift</b> run &nbsp;·&nbsp; <b>Mouse</b> look (click the game first) &nbsp;·&nbsp; <b>F</b> steal / exit car<br>
+    <b>Left mouse</b> shoot &nbsp;·&nbsp; <b>W A S D</b> drive, <b>S</b> brake &amp; reverse &nbsp;·&nbsp; <b>P / Esc</b> pause &nbsp;·&nbsp; follow the <b>gold marker</b>
+  </div>
+</div>
+
+<div id="story-card" class="overlay">
+  <div class="card">
+    <h2 id="card-title"></h2>
+    <p id="card-text"></p>
+    <div class="btn-row" style="justify-content:center">
+      <button id="btn-story">Let's go</button>
+    </div>
+  </div>
+</div>
+
+<div id="pause-screen" class="overlay">
+  <div class="card">
+    <h2>Paused</h2>
+    <p>The harbour holds its breath. Your progress saves itself after every job.</p>
+    <div class="btn-row" style="justify-content:center">
+      <button id="btn-resume">Resume</button>
+      <button id="btn-save-title" class="ghost">Save &amp; title</button>
+    </div>
+  </div>
+</div>
+
+<div id="end-screen" class="overlay">
+  <h1 id="end-title">BUSTED</h1>
+  <p id="end-text"></p>
+  <div class="btn-row">
+    <button id="btn-end">Try again</button>
+    <button id="btn-end-title" class="ghost">Title screen</button>
+  </div>
+</div>
+
+<script src="./vendor/three.min.js"></script>
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
