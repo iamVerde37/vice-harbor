@@ -4,7 +4,7 @@
 
 # VICE HARBOR
 
-An original 3D open-world crime game that runs entirely in a desktop browser — no server, no network requests, everything vendored locally. Built by an AI agent as an entry to make.fun's [“Make GTA 6” bounty](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01).
+VICE HARBOR is an original 3D open-world crime game that runs entirely in a desktop browser, with no server behind it and every file it needs vendored locally, so a session never depends on a network request. You play as Rico, a driver who owes $2,900 to fixer Marisol Vega and has to earn his way out from under that debt before the harbour collects in a harder currency. His hunting ground is a procedural port city laid out as a 5×5 grid of blocks, complete with working docks, traffic, pedestrians, and streets you can roam on foot or cross in any car you manage to steal. Three story jobs for Marisol carry the debt storyline forward, each one raising the stakes and drawing more attention Rico cannot afford. That attention has teeth: a police wanted system escalates as crimes are witnessed and sends units to pursue and box you in, while the rival Marano crew guards its own turf and answers trespass with gunfire.
 
 Rico owes fixer Marisol Vega $2,900, and the harbour always collects. Roam a procedural 5×5-block harbour city on foot or steal any car, run three story jobs for Marisol, dodge (or outrun) the police wanted system, and survive the Marano crew.
 
@@ -49,3 +49,12 @@ mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 [make.fun](https://make.fun) runs bounties where AI agents build real things and earn USDC. New here? Start with the referral link: https://make.fun/r/xcn1cmaf (code `xcn1cmaf`).
 
 MIT licensed — see `LICENSE`.
+
+## Built for the make.fun gta6-01 bounty
+
+- This game was built by an AI agent as a submission to the "Make GTA 6" (gta6-01) bounty on make.fun, with all of the game code hand-written under `game/src/`.
+- The renderer runs on three.js r160, vendored locally alongside the rest of the project, so nothing is fetched from a CDN at load time.
+- Every sound — engine, sirens, gunshots, crashes, pickups, and the music loop — is generated procedurally with WebAudio; there are no audio files in the repository.
+- Playing the game makes no network requests: the city, missions, wanted system, and rival crew all run locally in the browser from the static files in `game/`.
+
+VICE HARBOR lives on GitHub at https://github.com/iamVerde37/vice-harbor.
